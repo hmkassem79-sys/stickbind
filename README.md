@@ -2,7 +2,7 @@
 
 **Set up your flight sim controller by pressing the button you want to use.** No digging through menus.
 
-StickBind 0.1 works with **Microsoft Flight Simulator 2024 and 2020** (the Microsoft Store and Game Pass versions) on Windows. Steam, X-Plane and DCS support is planned.
+StickBind 0.2 works with **Microsoft Flight Simulator 2024 and 2020** (the Microsoft Store and Game Pass versions) on Windows. Steam, X-Plane and DCS support is planned.
 
 ## What it does
 
@@ -14,7 +14,7 @@ StickBind 0.1 works with **Microsoft Flight Simulator 2024 and 2020** (the Micro
 
 1. In the sim, go to Controls, select your device and save a profile once, so the sim writes it to disk.
 2. Close the sim completely.
-3. Run `stickbind.py` (Python 3.9+, nothing to install). An `.exe` is coming.
+3. Run `stickbind.py` (Python 3.9+). For buttons above 32, install pygame once with `pip install pygame`. An `.exe` with everything included is coming.
 4. Start the sim and pick your profile in Controls.
 
 ## Safety
@@ -25,8 +25,8 @@ StickBind isn't made by or affiliated with Microsoft, Asobo or any hardware make
 
 ## Known limits (0.1)
 
-- Only buttons 1 to 32 can be taught. Some bases send higher numbers.
-- Camera and hat views live in a different sim file, so set those in the sim for now.
+- Without pygame, only buttons 1 to 32 can be read. StickBind tells you when you press a higher one.
+- Camera and hat views live in a different sim file. StickBind recognises the hat and tells you how to set it in the sim.
 - Only the Microsoft Store and Game Pass versions of the sims are supported.
 
 Free. Found a bug, or want a preset for your device? Open an issue.

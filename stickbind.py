@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "0.1"
+VERSION = "0.2"
 SIMS = [("MSFS 2024", "Microsoft.Limitless_8wekyb3d8bbwe"), ("MSFS 2020", "Microsoft.FlightSimulator_8wekyb3d8bbwe")]
 BACKUPS = Path.home() / "Documents" / "StickBind backups"
 
@@ -158,9 +158,38 @@ def bindings(text):
             yield m.group(1), [k.strip() for k in keys]
 
 
-# ---------------------------------------------------------------- reading the stick (Windows winmm)
+# ---------------------------------------------------------------- reading the stick
+# pygame (SDL) sees up to 128 buttons and hats; Windows' built-in winmm only buttons 1-32.
+# Either way the result is (product id, what was pressed): ("button", n) 1-based like MSFS, or ("hat", None).
 
-def joy_api():
+def pygame_reader():
+    try:
+        os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+        import pygame
+    except ImportError:
+        return None
+    pygame.init()
+    pygame.joystick.init()
+    sticks = [pygame.joystick.Joystick(i) for i in range(pygame.joystick.get_count())]
+    for js in sticks:
+        js.init()
+
+    def pid(js):            # SDL GUID bytes 8-9 hold the USB product id
+        try:
+            g = bytes.fromhex(js.get_guid())
+            return int.from_bytes(g[8:10], "little")
+        except Exception:
+            return None
+
+    def snap():
+        pygame.event.pump()
+        return {i: ({b for b in range(js.get_numbuttons()) if js.get_button(b)},
+                    any(js.get_hat(h) != (0, 0) for h in range(js.get_numhats()))) for i, js in enumerate(sticks)}
+
+    return [(i, pid(js)) for i, js in enumerate(sticks)], snap
+
+
+def winmm_reader():
     from ctypes import wintypes
     winmm = ctypes.WinDLL("winmm")
 
@@ -177,35 +206,56 @@ def joy_api():
 
     def read(jid):
         info = JOYINFOEX(dwSize=ctypes.sizeof(JOYINFOEX), dwFlags=0xFF)
-        return info.dwButtons if winmm.joyGetPosEx(jid, ctypes.byref(info)) == 0 else None
+        if winmm.joyGetPosEx(jid, ctypes.byref(info)) != 0:
+            return None
+        btns = {b for b in range(32) if info.dwButtons >> b & 1}
+        if info.dwButtonNumber > len(btns):
+            btns.add(99)    # something above button 32 is down; winmm can't say which
+        return btns, info.dwPOV != 0xFFFF
 
     def pid(jid):
         caps = JOYCAPSW()
         return caps.wPid if winmm.joyGetDevCapsW(jid, ctypes.byref(caps), ctypes.sizeof(caps)) == 0 else None
 
-    return read, pid
+    ids = [j for j in range(16) if read(j) is not None]
+    return [(j, pid(j)) for j in ids], lambda: {j: read(j) or (set(), False) for j in ids}
 
 
 def wait_press(timeout=30):
-    """Return (product id, button number) of the next button pressed on any controller."""
-    read, pid = joy_api()
-    ids = [j for j in range(16) if read(j) is not None]
-    if not ids:
+    """Wait for one press. Returns (product id, ("button", n) or ("hat", None)), or None."""
+    reader = pygame_reader()
+    if not reader or not reader[0]:
+        reader = winmm_reader()
+    devices, snap = reader
+    if not devices:
         print("   Windows can't see any controller. Check the USB cable.")
         return None
-    base = {j: read(j) or 0 for j in ids}
-    print("   >> press and hold the button now ...")
-    end = time.time() + timeout
+    pids = dict(devices)
+    base = snap()
+    print(f"   >> press and hold the button now ({timeout}s, Ctrl+C to go back) ", end="", flush=True)
+    end, dot = time.time() + timeout, time.time()
     while time.time() < end:
-        for j in ids:
-            new = (read(j) or 0) & ~base[j]
+        now = snap()
+        for j, (btns, hat) in now.items():
+            new = btns - base[j][0]
             if new:
-                n = (new & -new).bit_length()
-                while (read(j) or 0) & (1 << (n - 1)):
+                b = min(new)
+                print()
+                if b == 99:
+                    print("   That button is above number 32, which this mode can't read.")
+                    print("   Fix: run  pip install pygame  once, then try again.")
+                    return None
+                while b in snap()[j][0]:
                     time.sleep(0.02)
-                return pid(j), n
+                return pids[j], ("button", b + 1)
+            if hat and not base[j][1]:
+                print()
+                return pids[j], ("hat", None)
+        if time.time() - dot > 1:
+            print(".", end="", flush=True)
+            dot = time.time()
         time.sleep(0.02)
-    print("   nothing came in (this version sees buttons 1-32).")
+    print("\n   Nothing came in. If you pressed something, run  pip install pygame  once and try again.")
     return None
 
 
@@ -236,10 +286,18 @@ def confirm_save(prof, text, summary):
 
 def teach(profiles):
     print("\nPress the button you want to set up.")
-    got = wait_press()
+    try:
+        got = wait_press()
+    except KeyboardInterrupt:
+        print("\n   back to the menu.")
+        return
     if not got:
         return
-    pid, n = got
+    pid, (kind, n) = got
+    if kind == "hat":
+        print("   That's the hat. MSFS keeps camera and view controls in a separate file, so set the hat in")
+        print("   the sim: Controls > your device > search 'look' or 'free look' > click the slot > push the hat.")
+        return
     match = [p for p in profiles if p.pid == pid] or profiles
     prof = match[0] if len(match) == 1 else match[ask("   Which device is that? " + "  ".join(
         f"{i}) {p.device}" for i, p in enumerate(match)) + ": ", len(match) - 1)]
@@ -278,8 +336,12 @@ def preset(profiles):
     prof, key = usable[c - 1]
     text = prof.blob.read_bytes().decode("utf-8")
     done = 0
+    used = {k: a for a, keys in bindings(text) for k in keys}
     for action, k in PRESETS[key][1]:
-        text, st = set_action(text, action, k, only_if_empty=True)
+        if k[0].strip() in used and used[k[0].strip()] != action:
+            st = f"skipped, {k[0].strip()} already does {used[k[0].strip()]}"
+        else:
+            text, st = set_action(text, action, k, only_if_empty=True)
         print(f"   {action:36s} {st}")
         done += st == "set"
     if done:
@@ -323,6 +385,10 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        print("\nStickBind hit an error. Nothing was saved after the last 'saved' line.")
     finally:
         if sys.stdin.isatty():
             input("\nPress Enter to close.")
