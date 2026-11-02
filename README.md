@@ -23,7 +23,7 @@ Before its first change, StickBind copies all your sim control profiles to `Docu
 
 StickBind isn't made by or affiliated with Microsoft, Asobo or any hardware maker. Use it at your own risk.
 
-## Known limits (0.1)
+## Known limits (0.2)
 
 - Without pygame, only buttons 1 to 32 can be read. StickBind tells you when you press a higher one.
 - Camera and hat views live in a different sim file. StickBind recognises the hat and tells you how to set it in the sim.
